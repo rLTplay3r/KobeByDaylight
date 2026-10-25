@@ -1,0 +1,9 @@
+PySide6>=6.8
+psutil>=5.9
+numpy>=1.26
+opencv-python-headless>=4.8
+mss>=9.0; sys_platform == "win32"
+python-xlib>=0.33; sys_platform == "linux"
+six; sys_platform == "linux"
+# pynput (Linux keyboard backend) is installed with --no-deps from requirements-nodeps.txt:
+# its evdev dependency needs a C compiler, and the app only uses evdev when it is present.

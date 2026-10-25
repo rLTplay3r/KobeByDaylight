@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.build-venv/
+
+# Build output (the builder, PyInstaller work files, Wine prefix, executables)
+build/
+dist/
+KBD-Builder
+packaging/icon.ico
+
+# Music is not distributed with the source because of copyright.
+# Put your own files into Music/ before building.
+Music/*
+!Music/README.md
+
+# Reference material
+*.mp4
+
+# Editors and OS files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+*.log
