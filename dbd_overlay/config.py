@@ -24,7 +24,7 @@ DEFAULTS = {
     "blind_threshold": 0.35,      # share of the screen centre that turns white on a blind
     "pov_duration": 3.5,
     "dance_every": 120.0,         # average seconds between Kobe dances
-    "dance_duration": 7.0,
+    "dance_duration": 12.0,       # seconds Kobe dances (the clip loops if it is shorter)
     "kobe_first_min": 5.0,       # the first Kobe comes this many seconds after spawn...
     "kobe_first_max": 20.0,      # ...at a random moment up to this
     "kobe_every": 80.0,          # average seconds between Kobe pop-ups (actual: +-40%)

@@ -61,6 +61,17 @@ def scale_to_slider(scale: float) -> int:
 
 MAX_PANEL_HEIGHT = 600
 
+DANCE_MIN, DANCE_MAX = 3.0, 30.0  # seconds
+
+
+def slider_to_dance(v: int) -> float:
+    return round(DANCE_MIN + (DANCE_MAX - DANCE_MIN) * v / 100)
+
+
+def dance_to_slider(secs: float) -> int:
+    return round((min(max(secs, DANCE_MIN), DANCE_MAX) - DANCE_MIN) / (DANCE_MAX - DANCE_MIN) * 100)
+
+
 STATUS_TITLES = {
     "stopped": "Overlay stopped",
     "off": "Game not running",
@@ -254,6 +265,27 @@ class ControlPanel(BloodBackground):
             self.freq_sliders[key] = s
             self.freq_values[key] = value
 
+        # Dance length
+        row = QHBoxLayout()
+        name = _label("Dance length", heading_font(14, QFont.Weight.Normal, 1.2))
+        name.setFixedWidth(120)
+        row.addWidget(name)
+        self.dance_len = BloodSlider()
+        self.dance_len.setToolTip("How long Kobe dances each time")
+        self.dance_len_value = _label("", heading_font(14, QFont.Weight.Normal, 1, caps=False), MUTED)
+        self.dance_len_value.setFixedWidth(58)
+        self.dance_len_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        def dance_len_changed(v):
+            secs = slider_to_dance(v)
+            self.dance_len_value.setText(f"{secs:.0f} s")
+            ctl.set_option("dance_duration", secs)
+
+        self.dance_len.valueChanged.connect(dance_len_changed)
+        row.addWidget(self.dance_len, 1)
+        row.addWidget(self.dance_len_value)
+        layout.addLayout(row)
+
         # -- scale ------------------------------------------------------------
         layout.addWidget(SectionTitle("Scale"))
         self.scale_sliders: dict[str, BloodSlider] = {}
@@ -404,6 +436,10 @@ class ControlPanel(BloodBackground):
             slider.setValue(round(cfg[key] * 100))
             slider.blockSignals(False)
             self.slider_values[key].setText(f"{slider.value()}%")
+        self.dance_len.blockSignals(True)
+        self.dance_len.setValue(dance_to_slider(float(cfg["dance_duration"])))
+        self.dance_len.blockSignals(False)
+        self.dance_len_value.setText(f"{float(cfg['dance_duration']):.0f} s")
         for key, _ in SCALES:
             slider = self.scale_sliders[key]
             slider.blockSignals(True)

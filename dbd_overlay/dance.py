@@ -15,7 +15,9 @@ from PySide6.QtGui import QImage
 from . import paths
 
 VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv", ".avi"}
-BLACK = 26  # brightness below which a pixel touching the border counts as background
+# Background = dark pixels joined to the frame edge. A beard can be as dark as the background,
+# so the dancer's silhouette (bright parts closed over small dark gaps) is protected.
+BLACK = 15  # background is ~9; hair is mostly brighter, the beard is protected below
 
 
 def dance_files() -> list[Path]:
@@ -27,21 +29,32 @@ def dance_files() -> list[Path]:
 def key_black(frame_bgr):
     """BGR frame -> RGBA with the black background transparent.
 
-    Only dark pixels connected to the frame border are removed, so dark hair,
-    beard and shadows on the dancer stay solid.
+    Dark pixels connected to the frame border are background, except inside the
+    dancer's silhouette: the bright body parts closed over small dark gaps, which
+    keeps a near-black beard or shadowed neck solid instead of see-through.
     """
     import cv2
     import numpy as np
 
     h, w = frame_bgr.shape[:2]
-    dark = (frame_bgr.max(axis=2) < BLACK).astype(np.uint8)
-    # Flood the dark area from the border: whatever it reaches is background
-    flood = np.zeros((h + 2, w + 2), np.uint8)
-    bg = dark.copy()
-    for seed in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w // 2, 0), (w // 2, h - 1)):
-        if bg[seed[1], seed[0]] == 1:
-            cv2.floodFill(bg, flood, seed, 2)
-    alpha = np.where(bg == 2, 0, 255).astype(np.uint8)
+    m = frame_bgr.max(axis=2)
+    dark = (m < BLACK).astype(np.uint8)
+    n, labels = cv2.connectedComponents(dark, connectivity=4)
+    border = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
+    border = border[border != 0]
+    bg = np.isin(labels, border)
+    # Silhouette: bright parts (skin, jersey) closed with a kernel about a beard wide
+    k = max(5, int(h * 0.03)) | 1
+    silhouette = cv2.morphologyEx((1 - dark), cv2.MORPH_CLOSE,
+                                  cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))).astype(bool)
+    bg &= ~silhouette
+    # Compression specks in the background (a few pixels a bit brighter than the black)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats((~bg).astype(np.uint8), connectivity=8)
+    small = np.where(stats[:, cv2.CC_STAT_AREA] < h * w * 0.0005)[0]
+    small = small[small != 0]
+    if small.size:
+        bg |= np.isin(labels, small)
+    alpha = np.where(bg, 0, 255).astype(np.uint8)
     alpha = cv2.GaussianBlur(alpha, (3, 3), 0)  # soft edge instead of a jagged cut
     rgba = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGBA)
     rgba[..., 3] = alpha
@@ -164,8 +177,11 @@ class DancePlayer(QObject):
         shown = 0
         while not stop.is_set():
             ok, img = cap.read()
-            elapsed = time.monotonic() - start
-            if not ok or elapsed > duration:
+            if not ok:
+                # Asked for longer than the clip: start it over
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ok, img = cap.read()
+            if not ok or time.monotonic() - start > duration:
                 break
             self.frame.emit(to_qimage(self._render(img, height, box)))
             shown += 1
