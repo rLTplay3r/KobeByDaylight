@@ -80,7 +80,7 @@ Put any of these next to the executable (or edit them in the source) to change t
 | `Sounds/` | "MAN" plays on Space, "What Can I Say" with every Kobe pop-up. Every other sound in the folder plays at random moments. |
 | `kobe-sprites/` | Kobe cutouts (transparent PNG). Each pop-up picks one at random; the bubble attaches to the head automatically. |
 | `kobe_texts.txt` | Lines for the speech bubble, one per line. |
-| `dancing/` | Dance videos on a black background (the black becomes transparent). A random one plays at random moments. |
+| `dancing/` | Dance videos on a green screen (or a black background), which becomes transparent. A random one plays at random moments. |
 | `effects/killer-pov.gif` | The blinded killer's view shown when you blind the killer. |
 | `effects/kobe-hiding.png` | Kobe going "shh" (the Hide button). |
 | `speechbuble.png` | The speech bubble image. |

@@ -6,7 +6,8 @@ Every new feature or fix raises the last number of the version in
 ## 0.1.0
 - First public release.
 - Dance length setting (3-30 s, default 12 s, longer than before); the clip repeats if needed.
-- Dancing Kobe's near-black beard is no longer see-through, and no black specks around him.
+- Dancing Kobe now uses a green-screen video, keyed by colour: the beard and hair stay solid,
+  clean soft edges without a green outline. Black-background videos still work (detected automatically).
 
 ## 0.0.21
 - Timer matched frame by frame to the reference edits: bigger (digits ~9% of the screen
