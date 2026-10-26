@@ -147,6 +147,11 @@ On Windows use `.venv\Scripts\pip` and `.venv\Scripts\python`.
 - If the panel says "HUD: not visible" while you're in a match, click **Save HUD capture** and
   open an issue with the image from the settings folder's `debug/` subfolder.
 
+## Roadmap 
+<ul><li>Dancing Kobe via wiggleai</li>
+<ul><li>make detection for flashing the killer</li>
+<ul><li>make timer more like original</li>
+
 ## License and credits
 
 The code is under the [MIT License](LICENSE). The images, sounds and the Oswald font keep their
