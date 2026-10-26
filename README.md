@@ -155,9 +155,8 @@ On Windows use `.venv\Scripts\pip` and `.venv\Scripts\python`.
   open an issue with the image from the settings folder's `debug/` subfolder.
 
 ## Roadmap 
-<ul><li>Dancing Kobe via wiggleai</li></ul>
-<ul><li>make detection for flashing the killer</li></ul>
-<ul><li>make timer more like original</li></ul>
+<ul><li>New features, while testing</li></ul>
+
 
 ## License and credits
 
