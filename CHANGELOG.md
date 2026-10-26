@@ -3,6 +3,12 @@
 Every new feature or fix raises the last number of the version in
 `dbd_overlay/__init__.py` (0.0.12 -> 0.0.13).
 
+## 0.0.21
+- Timer matched frame by frame to the reference edits: bigger (digits ~9% of the screen
+  height, hairline font, darker box), and the beat kick is as hard as in the video: the digits
+  snap ~12% left and up out of the box, hang there smeared for a moment, spring back with a
+  small overshoot. Only the digits move, the box stays.
+
 ## 0.0.20
 - Killer POV: blinding the killer with the flashlight shows the blinded killer's view in the
   top-right corner with a "KILLER POV →" label, like in the edit. Detected while the right mouse

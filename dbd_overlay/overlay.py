@@ -1,9 +1,10 @@
 """Transparent, click-through, always-on-top window that draws the timer, Kobe and effects."""
 
+import math
 import random
 import time
 
-from PySide6.QtCore import QEasingCurve, QRectF, Qt, QTimer
+from PySide6.QtCore import QEasingCurve, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QColor, QFont, QFontMetricsF, QGuiApplication, QImage, QMovie, QPainter, QPainterPath, QPen, QPixmap,
 )
@@ -15,7 +16,14 @@ FRAME_MS = 16
 SLIDE_IN = 0.35
 SLIDE_OUT = 0.35
 BUBBLE_DELAY = 0.2
-KICK_LENGTH = 0.14  # seconds the timer stays knocked out of place after a beat
+# Timer "kick" on the beat, measured frame by frame on the reference edits (fractions of
+# the screen height): the digits snap ~12% left and ~2.7% up in about 25 ms, hang there
+# heavily smeared for ~0.06 s, spring back within ~0.1 s, overshoot slightly right, settle.
+KICK_ATTACK = 0.025
+KICK_HOLD = 0.06
+KICK_LENGTH = 0.45
+KICK_DX, KICK_DY = -0.12, -0.027
+KICK_DECAY, KICK_PERIOD = 0.06, 0.4
 PREVIEW_TEXT = "Man, what can I say?"
 PREVIEW_BEAT = 0.42  # fake beat so the preview shows the timer shake
 # Dark text area inside speechbuble.png, as fractions of the image size
@@ -159,9 +167,31 @@ class OverlayWindow(QWidget):
 
     def kick(self):
         """Knock the timer out of place for a moment, as on the beat in the video."""
-        dx = random.choice((-1, 1)) * random.uniform(0.006, 0.014)
-        dy = random.uniform(-0.006, 0.004)
-        self._kick = (time.monotonic(), dx, dy)
+        # Always up-left like the edit; a little variation so beats don't look stamped
+        power = random.uniform(0.85, 1.1)
+        self._kick = (time.monotonic(), KICK_DX * power, KICK_DY * power)
+
+    @staticmethod
+    def _kick_shape(t: float) -> float:
+        """Offset multiplier: fast snap out, damped spring back with a small overshoot."""
+        if t < 0:
+            return 0.0
+        if t < KICK_ATTACK:
+            k = t / KICK_ATTACK
+            return 1 - (1 - k) ** 2
+        t -= KICK_ATTACK
+        if t < KICK_HOLD:
+            return 1 - 0.3 * t / KICK_HOLD  # hangs out there, drifting back a little
+        t -= KICK_HOLD
+        return 0.7 * math.exp(-t / KICK_DECAY) * math.cos(2 * math.pi * t / KICK_PERIOD)
+
+    @staticmethod
+    def _kick_blur(t: float) -> float:
+        """Smear strength: full while the digits hang out, then clears quickly."""
+        if t < KICK_ATTACK:
+            return max(0.0, t / KICK_ATTACK)
+        t -= KICK_ATTACK + KICK_HOLD
+        return 1.0 if t < 0 else math.exp(-t / 0.05)
 
     def kobe_active(self) -> bool:
         return self._popup is not None
@@ -354,48 +384,66 @@ class OverlayWindow(QWidget):
         p.restore()
 
     def _paint_timer(self, p: QPainter, elapsed: float, now: float):
-        # Thin white digits on a dark translucent box flush with the top-left corner
-        h = self.height()
+        # Thin white digits on a dark box flush with the top-left corner, sized like the edit:
+        # digits ~9% of the screen height, box ~0.6 x 0.14 of the height
+        h = self.height() * self.scales["timer"]
         font = QFont()
-        font.setFamilies(["Bahnschrift Light", "Segoe UI Light", "Noto Sans", "DejaVu Sans"])
-        font.setWeight(QFont.Weight.Light)
-        font.setPixelSize(max(12, int(h * 0.075 * self.scales["timer"])))
+        # Hairline digits like the edit: the thinnest weight the system has
+        font.setFamilies(["Helvetica Neue", "Segoe UI Light", "Segoe UI", "Noto Sans", "DejaVu Sans"])
+        font.setWeight(QFont.Weight.ExtraLight)
+        font.setPixelSize(max(12, int(h * 0.13)))
         font.setStyleHint(QFont.StyleHint.SansSerif)
         p.setFont(font)
         fm = QFontMetricsF(font)
         text = format_elapsed(elapsed)
         # Fixed-width box so it does not wobble as digits change
-        text_w = fm.horizontalAdvance("00:00.00")
-        pad_x, pad_y = h * 0.012, h * 0.004
-        box = QRectF(0, 0, text_w + pad_x * 2, fm.height() + pad_y * 2)
+        pad_l, pad_r = h * 0.028, h * 0.03
+        box = QRectF(0, 0, fm.horizontalAdvance("00:00.00") + pad_l + pad_r, h * 0.136)
+        baseline = box.height() / 2 + fm.capHeight() / 2
 
-        # On a beat the whole timer jerks sideways, smears and splits into RGB
-        strength, dx, dy = 0.0, 0.0, 0.0
+        # The box stays put; only the digits jump inside it (and off the screen edge)
+        dx = dy = 0.0
+        blur = split = 0.0
+        scale = 1.0
         if self._kick:
-            age = now - self._kick[0]
-            if age < KICK_LENGTH:
-                strength = 1 - age / KICK_LENGTH
-                dx, dy = self._kick[1] * h * strength, self._kick[2] * h * strength
-            else:
+            start, kx, ky = self._kick
+            t = now - start
+            if t > KICK_LENGTH:
                 self._kick = None
+            else:
+                k = self._kick_shape(t)
+                dx, dy = kx * h * k, ky * h * k
+                blur = self._kick_blur(t)
+                # Colour fringes only around the snap itself
+                split = math.exp(-max(0.0, t - KICK_ATTACK) / 0.04) if t >= KICK_ATTACK else blur
+                scale = 1 + 0.12 * blur
+                # The smear streaks back toward the rest position, mostly up/down like the edit
+                trail = (-kx * h * 0.35 * blur, -ky * h * 1.6 * blur)
+
+        p.fillRect(box, QColor(8, 8, 8, 180))
         p.save()
-        p.translate(dx, dy)
-        p.fillRect(box.adjusted(-abs(dx), 0, abs(dx), 0), QColor(0, 0, 0, 150))
-        text_rect = box.adjusted(pad_x, 0, 0, 0)
-        align = Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
-        if strength > 0:
-            split = h * 0.006 * strength
+        p.translate(box.width() / 2 + dx, box.height() / 2 + dy)
+        p.scale(scale, scale)
+        p.translate(-box.width() / 2, -box.height() / 2)
+        if blur > 0.02 or split > 0.02:
             p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
-            for color, off in ((QColor(255, 0, 40, 170), -split), (QColor(0, 120, 255, 170), split)):
+            # Motion blur: many faint copies spread along the motion, centred on the digits,
+            # so it reads as a smooth streak rather than separate echoes
+            steps = 20
+            for i in range(steps):
+                f = i / (steps - 1) - 0.5
+                weight = 1 - abs(f) * 1.2
+                p.setPen(QColor(255, 255, 255, int(255 * 2.2 / steps * blur * weight)))
+                p.drawText(QPointF(pad_l + trail[0] * f, baseline + trail[1] * f), text)
+            # Chromatic split: red to the left, blue to the right
+            off = h * 0.005 * split
+            for color, ox in ((QColor(255, 20, 40, int(110 * split)), -off), (QColor(30, 110, 255, int(110 * split)), off)):
                 p.setPen(color)
-                p.drawText(text_rect.translated(off, 0), align, text)
-            # Motion smear: fading copies trailing the jump
-            for i in (1, 2):
-                p.setPen(QColor(255, 255, 255, int(70 * strength / i)))
-                p.drawText(text_rect.translated(-dx * 0.35 * i, 0), align, text)
+                p.drawText(QPointF(pad_l + ox, baseline), text)
             p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-        p.setPen(QColor(255, 255, 255, 235))
-        p.drawText(text_rect, align, text)
+        # Sharp copy fades while the smear is strong, like the motion-blurred frames
+        p.setPen(QColor(255, 255, 255, int(235 * (1 - 0.6 * blur))))
+        p.drawText(QPointF(pad_l, baseline), text)
         p.restore()
 
     def _paint_kobe(self, p: QPainter, t: float, duration: float, text: str, index: int):
