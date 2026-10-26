@@ -8,6 +8,8 @@ IS_WIN = sys.platform == "win32"
 datas = [
     (str(ROOT / "Sounds"), "Sounds"),
     (str(ROOT / "kobe-sprites"), "kobe-sprites"),
+    (str(ROOT / "effects"), "effects"),
+    (str(ROOT / "dancing"), "dancing"),
     (str(ROOT / "speechbuble.png"), "."),
     (str(ROOT / "kobe_texts.txt"), "."),
     (str(ROOT / "KBD_icon.jpg"), "."),
@@ -20,7 +22,7 @@ datas += [(str(p), "Music") for p in sorted((ROOT / "Music").glob("*")) if p.suf
 
 # pynput picks its backend at runtime, so PyInstaller cannot see it
 # HUD detection modules are imported lazily from a worker thread
-hiddenimports = ["dbd_overlay.capture", "dbd_overlay.hud", "cv2", "numpy"]
+hiddenimports = ["dbd_overlay.capture", "dbd_overlay.hud", "dbd_overlay.dance", "cv2", "numpy"]
 hiddenimports += ["mss", "mss.windows"] if IS_WIN else [
     "pynput.keyboard._xorg", "pynput.mouse._xorg", "evdev", "Xlib.display", "Xlib.X",
 ]

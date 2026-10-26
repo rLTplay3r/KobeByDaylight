@@ -7,6 +7,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from . import paths
 from .audio import Audio
+from .dance import DancePlayer
 from .detection import GameWatcher, HudWatcher
 from .keys import KeyListener
 from .overlay import OverlayWindow
@@ -48,10 +49,13 @@ class Controller(QObject):
         self.previewing = False
         self.keys = KeyListener(self)
         self.keys.pressed.connect(self._on_key)
+        self.keys.released.connect(self._on_key_released)
         self.watcher = GameWatcher(self)
         self.watcher.game_running_changed.connect(self._on_game_running)
         self.hud = HudWatcher(self.watcher, config.path.parent / "debug", self)
         self.hud.sample.connect(self._on_hud_sample)
+        self.hud.blind.connect(self._on_blind)
+        self.hud.blind_threshold = float(config["blind_threshold"])
         self.hud_score = 0.0
         self.hud_status = "waiting for the game"
         self._hud_hits = 0
@@ -71,6 +75,13 @@ class Controller(QObject):
         self._sound_timer.setSingleShot(True)
         self._sound_timer.timeout.connect(self._scheduled_sound)
 
+        self.dance = DancePlayer(self)
+        self.dance.frame.connect(self.overlay.set_dance_frame)
+        self.dance.finished.connect(self.overlay.dance_finished)
+        self._dance_timer = QTimer(self)
+        self._dance_timer.setSingleShot(True)
+        self._dance_timer.timeout.connect(self._scheduled_dance)
+
         # Keeps the timer shaking at a fixed tempo when the music gives no beat
         self._last_beat = 0.0
         self._beat_fallback = QTimer(self)
@@ -89,9 +100,13 @@ class Controller(QObject):
         self.running = True
         self.keys.set_active(True)
         self.watcher.start()
-        if self.config["auto_detect"]:
+        if self._needs_screen():
             self.hud.start()
         self.state_changed.emit()
+
+    def _needs_screen(self) -> bool:
+        # Screenshots are needed for match detection and for spotting flashlight blinds
+        return bool(self.config["auto_detect"] or self.config["pov_enabled"])
 
     def stop(self):
         if not self.running:
@@ -156,6 +171,17 @@ class Controller(QObject):
             self.on_space()
         elif name == "hotkey":
             self.toggle_match()
+        elif name == "flashlight" and self.in_match and self.config["pov_enabled"]:
+            self.hud.set_flashlight(True)
+
+    def _on_key_released(self, name: str):
+        if name == "flashlight":
+            self.hud.set_flashlight(False)
+
+    def _on_blind(self):
+        # The flashlight burst was seen on screen: show what the blinded killer sees
+        if self.in_match and self.config["pov_enabled"]:
+            self.show_killer_pov()
 
     # -- match --------------------------------------------------------------
 
@@ -180,6 +206,7 @@ class Controller(QObject):
         self._beat_fallback.start()
         self._schedule_kobe(first=True)
         self._schedule_sound()
+        self._schedule_dance()
         self.state_changed.emit()
 
     def end_match(self):
@@ -188,6 +215,9 @@ class Controller(QObject):
         self.match_start = None
         self._kobe_timer.stop()
         self._sound_timer.stop()
+        self._dance_timer.stop()
+        self.dance.stop()
+        self.hud.set_flashlight(False)
         self._beat_fallback.stop()
         self.audio.stop_music()
         self.overlay.end_match()
@@ -214,7 +244,7 @@ class Controller(QObject):
         self.audio.play("man")
 
     def show_kobe(self):
-        if not self.in_match:
+        if not self.in_match or self.dance.playing():
             return
         choices = [t for t in self._texts if t != self._last_text] or self._texts
         text = random.choice(choices)
@@ -238,11 +268,41 @@ class Controller(QObject):
             delay = jittered(float(self.config["kobe_every"]))
         self._kobe_timer.start(int(delay * 1000))
 
+    def show_killer_pov(self):
+        if self.in_match:
+            self.overlay.show_killer_pov(float(self.config["pov_duration"]))
+
+    def show_hiding(self):
+        if self.in_match:
+            self.overlay.show_hiding()
+
+    def show_dance(self):
+        if self.in_match:
+            self.dance.start(self.overlay.dance_height(), float(self.config["dance_duration"]))
+
+    def _scheduled_dance(self):
+        if not self.in_match:
+            return
+        # Kobe's speech bubble and the dance share the left side; don't stack them
+        if self.overlay.kobe_active() or self.dance.playing():
+            self._dance_timer.start(5000)
+            return
+        if self.config["dance_enabled"]:
+            self.show_dance()
+        self._schedule_dance()
+
+    def _schedule_dance(self):
+        if not self.in_match or not self.dance.available:
+            return
+        self._dance_timer.start(int(jittered(float(self.config["dance_every"])) * 1000))
+
     def set_preview(self, on: bool):
         """Scale mode: show every overlay element on screen while sizes are tuned."""
         if on == self.previewing:
             return
         self.previewing = on
+        if on:
+            self.overlay.dance_preview = self.dance.still(self.overlay.dance_height() or 600)
         self.overlay.set_preview(on, self.hud.game_center)
         self.state_changed.emit()
 
@@ -284,12 +344,16 @@ class Controller(QObject):
             self.audio.set_sfx_volume(value)
         elif key.startswith("scale_"):
             self.overlay.set_scale(key[len("scale_"):], float(value))
+            if key == "scale_dance" and self.previewing:
+                self.overlay.dance_preview = self.dance.still(self.overlay.dance_height())
         elif key == "kobe_every" and self._kobe_timer.isActive():
             self._schedule_kobe(first=False)  # apply the new frequency right away
         elif key == "sound_every" and self._sound_timer.isActive():
             self._schedule_sound()
-        elif key == "auto_detect" and self.running:
-            if value:
+        elif key == "dance_every" and self._dance_timer.isActive():
+            self._schedule_dance()
+        elif key in ("auto_detect", "pov_enabled") and self.running:
+            if self._needs_screen():
                 self.hud.start()
             else:
                 self.hud.stop()

@@ -113,11 +113,20 @@ class GameWatcher(QObject):
 
 
 class HudWatcher(QObject):
-    """Samples the game's HUD corner twice a second on a worker thread."""
+    """Samples the game's HUD corner twice a second on a worker thread.
+
+    While the flashlight is held it also watches the middle of the screen ten
+    times a second for the white burst of a successful blind.
+    """
 
     sample = Signal(float, str)  # best rhombus score, capture status
+    blind = Signal()
 
     INTERVAL = 0.5
+    FLASH_INTERVAL = 0.1
+    FLASH_LINGER = 0.6     # keep watching a moment after the button is released
+    FLASH_MIN_HOLD = 0.25  # a blind needs the beam on the killer for a while
+    BLIND_COOLDOWN = 4.0
 
     def __init__(self, game: GameWatcher, debug_dir: Path, parent=None):
         super().__init__(parent)
@@ -127,6 +136,9 @@ class HudWatcher(QObject):
         self._thread: threading.Thread | None = None
         self._save_debug = False
         self.game_center: tuple[int, int] | None = None  # native pixels, for picking the monitor
+        self.blind_threshold = 0.35
+        self._flash_since: float | None = None  # flashlight held since (monotonic)
+        self._flash_until = 0.0                 # still watching until (after release)
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -141,6 +153,23 @@ class HudWatcher(QObject):
     def save_debug_capture(self):
         self._save_debug = True
 
+    def set_flashlight(self, held: bool):
+        now = time.monotonic()
+        if held:
+            self._flash_since = now
+        else:
+            self._flash_until = now + self.FLASH_LINGER
+            self._flash_since = None
+
+    def _flash_watch(self, now: float) -> float | None:
+        """Seconds the flashlight has been held, or None when not watching."""
+        since = self._flash_since
+        if since is not None:
+            return now - since
+        if now < self._flash_until:
+            return self.FLASH_MIN_HOLD  # just released: still counts
+        return None
+
     def _run(self):
         # Heavy imports stay off the startup path and out of the UI thread
         try:
@@ -149,15 +178,35 @@ class HudWatcher(QObject):
             self.sample.emit(0.0, f"screen detection unavailable ({e})")
             return
         grabber = None
-        while not self._stop.wait(self.INTERVAL):
+        last_hud = 0.0
+        last_blind = 0.0
+        baseline: float | None = None
+        while not self._stop.wait(self.FLASH_INTERVAL if self._flash_watch(time.monotonic()) is not None
+                                  else self.INTERVAL):
             pids = set(self._game.pids)
             if not pids:
                 continue
+            now = time.monotonic()
             try:
                 if grabber is None:
                     grabber = capture.make_grabber()
                 width, height = grabber.window_size(pids)
                 self.game_center = grabber.center
+
+                held = self._flash_watch(now)
+                if held is None:
+                    baseline = None
+                else:
+                    white = hud.white_fraction(grabber.grab(*hud.center_region(width, height)))
+                    if baseline is None:
+                        baseline = white  # bright scenery before the beam isn't a blind
+                    if (held >= self.FLASH_MIN_HOLD and white > self.blind_threshold
+                            and white - baseline > 0.2 and now - last_blind > self.BLIND_COOLDOWN):
+                        last_blind = now
+                        self.blind.emit()
+                if now - last_hud < self.INTERVAL:
+                    continue
+                last_hud = now
                 best, best_img = 0.0, None
                 for x, y, w, h in hud.hud_regions(width, height):
                     img = grabber.grab(x, y, w, h)

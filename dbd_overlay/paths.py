@@ -24,6 +24,10 @@ def _asset(name: str) -> Path:
 MUSIC_DIR = _asset("Music")
 SOUNDS_DIR = _asset("Sounds")
 KOBE_SPRITES_DIR = _asset("kobe-sprites")
+EFFECTS_DIR = _asset("effects")
+DANCE_DIR = _asset("dancing")
+KILLER_POV = EFFECTS_DIR / "killer-pov.gif"
+KOBE_HIDING = EFFECTS_DIR / "kobe-hiding.png"
 BUBBLE_IMAGE = _asset("speechbuble.png")
 KOBE_TEXTS = _asset("kobe_texts.txt")
 APP_ICON = _asset("KBD_icon.jpg")

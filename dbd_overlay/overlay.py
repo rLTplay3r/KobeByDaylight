@@ -1,10 +1,12 @@
-"""Transparent, click-through, always-on-top window that draws the timer and Kobe."""
+"""Transparent, click-through, always-on-top window that draws the timer, Kobe and effects."""
 
 import random
 import time
 
 from PySide6.QtCore import QEasingCurve, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QGuiApplication, QImage, QPainter, QPixmap
+from PySide6.QtGui import (
+    QColor, QFont, QFontMetricsF, QGuiApplication, QImage, QMovie, QPainter, QPainterPath, QPen, QPixmap,
+)
 from PySide6.QtWidgets import QWidget
 
 from . import paths
@@ -21,6 +23,11 @@ BUBBLE_TEXT_RECT = (0.23, 0.37, 0.60, 0.30)
 
 
 BUBBLE_TIP_Y = 0.49  # height of the bubble's left tip, as a fraction of the image
+POV_SIZE = 0.3        # killer POV inset: a 16:9 picture 0.3 of the screen height, top-right
+POV_LABEL = "KILLER POV \u2192"
+HIDE_DURATION = 2.6
+DANCE_HEIGHT = 0.8    # dancing Kobe, as a fraction of the screen height
+FADE = 0.3
 
 
 class Sprite:
@@ -77,12 +84,24 @@ class OverlayWindow(QWidget):
 
         self.timer_visible = True
         # Size multipliers per element, 1.0 = default
-        self.scales = {"timer": 1.0, "kobe": 1.0, "bubble": 1.0}
+        self.scales = {"timer": 1.0, "kobe": 1.0, "bubble": 1.0, "dance": 1.0, "pov": 1.0}
         self._preview_start: float | None = None
         self._preview_sprite = 0
         self._match_start: float | None = None
         self._popup: tuple[float, float, str, int] | None = None  # start, duration, text, sprite
         self._kick: tuple[float, float, float] | None = None  # start, dx, dy (fractions of height)
+
+        # Killer POV when blinded: the GIF plays in an inset like in the edit
+        self._pov = QMovie(str(paths.KILLER_POV))
+        self._pov.setCacheMode(QMovie.CacheMode.CacheAll)
+        self._pov_shown: tuple[float, float] | None = None  # start, duration
+        # Kobe going "shh" while hiding in a locker
+        self._hiding = QPixmap(str(paths.KOBE_HIDING))
+        self._hide_start: float | None = None
+        # Dancing Kobe: frames arrive from DancePlayer
+        self._dance_img: QImage | None = None
+        self._dance_end: float | None = None
+        self.dance_preview: QImage | None = None
 
         self._frame = QTimer(self)
         self._frame.setInterval(FRAME_MS)
@@ -100,6 +119,9 @@ class OverlayWindow(QWidget):
     def end_match(self):
         self._match_start = None
         self._popup = None
+        self._pov_shown = None
+        self._hide_start = None
+        self._dance_img = None
         if self._preview_start is None:
             self._frame.stop()
             self.hide()
@@ -144,6 +166,36 @@ class OverlayWindow(QWidget):
     def kobe_active(self) -> bool:
         return self._popup is not None
 
+    def show_killer_pov(self, duration: float = 3.5) -> bool:
+        if not self._pov.isValid():
+            return False
+        self._pov.stop()
+        self._pov.jumpToFrame(0)
+        self._pov.start()
+        self._pov_shown = (time.monotonic(), duration)
+        return True
+
+    def show_hiding(self) -> bool:
+        if self._hiding.isNull():
+            return False
+        self._hide_start = time.monotonic()
+        return True
+
+    def dance_height(self) -> int:
+        """Pixel height the dance frames should be decoded at."""
+        return int(self.height() * DANCE_HEIGHT * self.scales["dance"] * self.devicePixelRatioF())
+
+    def set_dance_frame(self, img: QImage):
+        img.setDevicePixelRatio(self.devicePixelRatioF())
+        self._dance_img = img
+        self._dance_end = None
+
+    def dance_finished(self):
+        self._dance_end = time.monotonic()  # fade the last frame out
+
+    def dance_active(self) -> bool:
+        return self._dance_img is not None
+
     # -- painting -----------------------------------------------------------
 
     def _cover_screen(self, game_center: tuple[int, int] | None):
@@ -170,6 +222,9 @@ class OverlayWindow(QWidget):
         # ratio looks the same; pixmaps are rendered at native pixels for HiDPI.
         h = self.height()
         smooth = Qt.TransformationMode.SmoothTransformation
+        if not self._hiding.isNull():
+            self._hiding_px = self._hiding.scaledToHeight(int(h * 0.62 * self.scales["kobe"] * dpr), smooth)
+            self._hiding_px.setDevicePixelRatio(dpr)
         self._sprite_px.clear()
         for i, sprite in enumerate(self._sprites):
             # 0.6 of the screen height at 100%, the size Kobe has in the video
@@ -198,17 +253,105 @@ class OverlayWindow(QWidget):
         if self.timer_visible or preview:
             self._paint_timer(p, now - start, now)
         if preview:
-            # Kobe fully risen with the bubble open, held still
+            # Every element shown and held still, so the sizes can be judged
+            if self.dance_preview is not None:
+                self.dance_preview.setDevicePixelRatio(self.devicePixelRatioF())
+                self._paint_dance(p, self.dance_preview, 1.0)
             if self._sprites:
                 self._paint_kobe(p, SLIDE_IN + 0.5, 1e9, PREVIEW_TEXT, self._preview_sprite)
+            if not self._hiding.isNull():
+                self._paint_hiding(p, SLIDE_IN + 0.5)
+            if self._pov.isValid():
+                if self._pov.state() != QMovie.MovieState.Running:
+                    self._pov.start()
+                self._paint_pov(p, 1.0)
             self._paint_preview_banner(p)
-        elif self._popup:
+            return
+        self._paint_effects(p, now)
+        if self._popup:
             start, duration, text, index = self._popup
             t = now - start
             if t > duration:
                 self._popup = None
             else:
                 self._paint_kobe(p, t, duration, text, index)
+
+    # -- effects ------------------------------------------------------------
+
+    def _paint_effects(self, p: QPainter, now: float):
+        if self._dance_img is not None:
+            alpha = 1.0
+            if self._dance_end is not None:
+                alpha = 1 - (now - self._dance_end) / FADE
+                if alpha <= 0:
+                    self._dance_img = None
+            if self._dance_img is not None:
+                self._paint_dance(p, self._dance_img, alpha)
+        if self._hide_start is not None:
+            t = now - self._hide_start
+            if t > HIDE_DURATION:
+                self._hide_start = None
+            else:
+                self._paint_hiding(p, t)
+        if self._pov_shown is not None:
+            start, duration = self._pov_shown
+            t = now - start
+            if t > duration:
+                self._pov_shown = None
+                self._pov.stop()
+            else:
+                # Quick fade in, slower fade out like the edit
+                alpha = min(1.0, t / 0.15, (duration - t) / 0.4)
+                self._paint_pov(p, alpha)
+
+    def _paint_pov(self, p: QPainter, alpha: float):
+        h, w = self.height(), self.width()
+        ph = h * POV_SIZE * self.scales["pov"]
+        pw = ph * 16 / 9
+        rect = QRectF(w - pw, 0, pw, ph)
+        p.save()
+        p.setOpacity(max(0.0, alpha))
+        p.drawPixmap(rect, self._pov.currentPixmap(), QRectF(self._pov.currentPixmap().rect()))
+        # "KILLER POV ->" in yellow with a thick purple outline, left of the inset
+        font = QFont()
+        font.setFamilies(["Oswald", "Impact", "Arial Black", "DejaVu Sans"])
+        font.setWeight(QFont.Weight.Bold)
+        font.setPixelSize(max(12, int(ph * 0.19)))
+        fm = QFontMetricsF(font)
+        tw = fm.horizontalAdvance(POV_LABEL)
+        path = QPainterPath()
+        path.addText(rect.left() - tw - ph * 0.12, ph * 0.45 + fm.ascent() / 2 - fm.descent() / 2, font, POV_LABEL)
+        p.setPen(QPen(QColor("#5b1fa8"), max(2.0, ph * 0.035), Qt.PenStyle.SolidLine,
+                      Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+        p.fillPath(path, QColor("#ffe81a"))
+        p.restore()
+
+    def _paint_hiding(self, p: QPainter, t: float):
+        h, w = self.height(), self.width()
+        px = self._hiding_px
+        size = px.deviceIndependentSize()
+        if t < SLIDE_IN:
+            shown = QEasingCurve(QEasingCurve.Type.OutBack).valueForProgress(t / SLIDE_IN)
+        elif t > HIDE_DURATION - SLIDE_OUT:
+            shown = 1 - QEasingCurve(QEasingCurve.Type.InCubic).valueForProgress(
+                (t - (HIDE_DURATION - SLIDE_OUT)) / SLIDE_OUT)
+        else:
+            shown = 1.0
+        # Bottom-right, rising from the bottom edge like in the edit
+        x = w - size.width() - h * 0.12
+        p.drawPixmap(int(x), int(h - size.height() * shown), px)
+
+    def _paint_dance(self, p: QPainter, img: QImage, alpha: float):
+        h = self.height()
+        size = img.deviceIndependentSize()
+        # Centre-left, feet on the bottom edge; height-based so ultrawide matches 16:9
+        x = h * 0.85 - size.width() / 2
+        p.save()
+        p.setOpacity(max(0.0, alpha))
+        p.drawImage(int(x), int(h - size.height()), img)
+        p.restore()
 
     def _paint_timer(self, p: QPainter, elapsed: float, now: float):
         # Thin white digits on a dark translucent box flush with the top-left corner

@@ -11,7 +11,9 @@ When you spawn into a trial it:
 - shows a stopwatch in the top-left corner that jerks on the beat of the music,
 - pops up a random Kobe with a random line in a speech bubble, with "What can I say",
 - plays random Kobe sounds now and then,
-- plays "Man" when you press Space (vaulting a window, dropping a pallet).
+- plays "Man" when you press Space (vaulting a window, dropping a pallet),
+- shows the blinded killer's view in the corner when you blind the killer with your flashlight,
+- makes Kobe dance on screen now and then.
 
 The app lives in the system tray. The tray icon shows the state with a coloured dot:
 red = game not running, yellow = in the lobby, green = in a match.
@@ -78,6 +80,9 @@ Put any of these next to the executable (or edit them in the source) to change t
 | `Sounds/` | "MAN" plays on Space, "What Can I Say" with every Kobe pop-up. Every other sound in the folder plays at random moments. |
 | `kobe-sprites/` | Kobe cutouts (transparent PNG). Each pop-up picks one at random; the bubble attaches to the head automatically. |
 | `kobe_texts.txt` | Lines for the speech bubble, one per line. |
+| `dancing/` | Dance videos on a black background (the black becomes transparent). A random one plays at random moments. |
+| `effects/killer-pov.gif` | The blinded killer's view shown when you blind the killer. |
+| `effects/kobe-hiding.png` | Kobe going "shh" (the Hide button). |
 | `speechbuble.png` | The speech bubble image. |
 
 Settings are saved in `~/.config/dbd-kobe-overlay/settings.json` on Linux and
@@ -140,6 +145,8 @@ On Windows use `.venv\Scripts\pip` and `.venv\Scripts\python`.
 ## Known limits
 
 - Space is also the skill-check key, so "Man" can play on skill checks (there is a cooldown).
+- Blind detection expects the flashlight on the right mouse button (the game's default) and the
+  screen captured as in match detection (on Linux: the game under XWayland).
 - Linux: match detection needs the game running through XWayland, which is the Proton default.
   It doesn't work with `PROTON_ENABLE_WAYLAND=1`.
 - Linux: for the most reliable Space detection install `evdev` (`pip install evdev`, needs a C

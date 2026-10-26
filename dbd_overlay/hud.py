@@ -84,3 +84,21 @@ def perk_rhombus_score(roi_bgr: np.ndarray) -> float:
         score = (hits - density) / np.maximum(1.0 - density, 0.05)
         best = max(best, float(score.max()))
     return best
+
+
+# -- flashlight blind --------------------------------------------------------------
+# A successful blind bursts into a big white-yellow flash where the player aims,
+# i.e. the middle of the screen. Measured on footage: 50-62% of this region turns
+# white on a blind, the flashlight beam alone stays under ~11%.
+CENTER = (0.3, 0.25, 0.4, 0.5)  # x, y, width, height as fractions of the game window
+
+
+def center_region(width: int, height: int) -> tuple[int, int, int, int]:
+    fx, fy, fw, fh = CENTER
+    return int(width * fx), int(height * fy), int(width * fw), int(height * fh)
+
+
+def white_fraction(img_bgr: np.ndarray) -> float:
+    small = cv2.resize(np.ascontiguousarray(img_bgr), (128, 90), interpolation=cv2.INTER_AREA)
+    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+    return float(((hsv[..., 2] > 235) & (hsv[..., 1] < 90)).mean())

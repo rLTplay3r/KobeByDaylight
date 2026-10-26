@@ -18,6 +18,9 @@ Music/*
 
 # Reference material
 *.mp4
+!dancing/*.mp4
+# Full-size source of effects/killer-pov.gif (60 MB)
+blidninmg.gif
 
 # Editors and OS files
 .vscode/

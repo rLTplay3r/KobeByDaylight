@@ -19,6 +19,12 @@ DEFAULTS = {
     "music_volume": 0.45,
     "sfx_volume": 0.85,
     "random_sounds_enabled": True,
+    "dance_enabled": True,
+    "pov_enabled": True,          # killer POV inset when a flashlight blind is seen
+    "blind_threshold": 0.35,      # share of the screen centre that turns white on a blind
+    "pov_duration": 3.5,
+    "dance_every": 120.0,         # average seconds between Kobe dances
+    "dance_duration": 7.0,
     "kobe_first_min": 5.0,       # the first Kobe comes this many seconds after spawn...
     "kobe_first_max": 20.0,      # ...at a random moment up to this
     "kobe_every": 80.0,          # average seconds between Kobe pop-ups (actual: +-40%)
@@ -28,6 +34,8 @@ DEFAULTS = {
     "scale_timer": 1.0,          # size multipliers for the on-screen elements
     "scale_kobe": 1.0,
     "scale_bubble": 1.0,
+    "scale_dance": 1.0,
+    "scale_pov": 1.0,
     "beat_fallback_interval": 0.42,  # timer shake tempo when the music gives no beat
 }
 

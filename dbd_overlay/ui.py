@@ -23,6 +23,8 @@ TOGGLES = [
     ("kobe_enabled", "Kobe pop-ups"),
     ("random_sounds_enabled", "Random sounds"),
     ("man_enabled", '"Man" on Space'),
+    ("dance_enabled", "Kobe dance"),
+    ("pov_enabled", "Killer POV on blind"),
 ]
 
 # Frequency sliders: right = more often. Value is the average seconds between events,
@@ -30,6 +32,7 @@ TOGGLES = [
 FREQUENCIES = [
     ("kobe_every", "Kobe", 300.0, 15.0),
     ("sound_every", "Sounds", 180.0, 10.0),
+    ("dance_every", "Dance", 300.0, 20.0),
 ]
 
 
@@ -43,7 +46,8 @@ def seconds_to_slider(seconds: float, rare: float, often: float) -> int:
 
 
 # On-screen element sizes, 50-200% of the default
-SCALES = [("scale_timer", "Timer"), ("scale_kobe", "Kobe"), ("scale_bubble", "Bubble")]
+SCALES = [("scale_timer", "Timer"), ("scale_kobe", "Kobe"), ("scale_bubble", "Bubble"),
+          ("scale_dance", "Dance"), ("scale_pov", "Killer POV")]
 SCALE_MIN, SCALE_MAX = 0.5, 2.0
 
 
@@ -278,7 +282,7 @@ class ControlPanel(BloodBackground):
         scale_buttons = QHBoxLayout()
         self.preview_btn = BrushButton()
         self.preview_btn.setCheckable(True)
-        self.preview_btn.setToolTip("Unlocks the sizes and shows the timer and Kobe on screen as a preview")
+        self.preview_btn.setToolTip("Unlocks the sizes and shows every element on screen as a preview")
         self.preview_btn.toggled.connect(ctl.set_preview)
         scale_buttons.addWidget(self.preview_btn, 1)
         reset = self.reset_sizes_btn = BrushButton("RESET SIZES")
@@ -288,19 +292,23 @@ class ControlPanel(BloodBackground):
 
         # -- manual trial controls ---------------------------------------------
         layout.addWidget(SectionTitle("Trial"))
-        buttons = QHBoxLayout()
-        buttons.setSpacing(6)
-        for label, slot, tip in (
+        buttons = QGridLayout()
+        buttons.setHorizontalSpacing(6)
+        buttons.setVerticalSpacing(4)
+        for i, (label, slot, tip) in enumerate((
             ("Spawn", lambda: ctl.begin_match(), f"Start a match now ({HOTKEY_NAME} in game)"),
             ("Space", ctl.on_space, 'Play "Man"'),
             ("Kobe", ctl.show_kobe, "Show a Kobe pop-up"),
             ("Sound", ctl.play_random_sound, "Play a random Kobe sound"),
+            ("Dance", ctl.show_dance, "Make Kobe dance"),
+            ("Hide", ctl.show_hiding, 'Kobe going "shh", as when you hide in a locker'),
+            ("POV", ctl.show_killer_pov, "Show the blinded killer's view (normally: when you blind the killer)"),
             ("End", ctl.end_match, f"End the match ({HOTKEY_NAME} in game)"),
-        ):
+        )):
             b = BrushButton(label.upper())
             b.setToolTip(tip)
             b.clicked.connect(slot)
-            buttons.addWidget(b)
+            buttons.addWidget(b, i // 4, i % 4)
         layout.addLayout(buttons)
         hint = QLabel(f"{HOTKEY_NAME} starts or ends a match in game. Spawns are detected automatically.")
         hint.setObjectName("muted")
@@ -460,6 +468,9 @@ class Tray(QSystemTrayIcon):
         sim.addAction("Press Space", ctl.on_space)
         sim.addAction("Show Kobe", ctl.show_kobe)
         sim.addAction("Random sound", ctl.play_random_sound)
+        sim.addAction("Kobe dance", ctl.show_dance)
+        sim.addAction("Hide (shh)", ctl.show_hiding)
+        sim.addAction("Killer POV", ctl.show_killer_pov)
         sim.addAction("End match", ctl.end_match)
         menu.addSeparator()
         menu.addAction("Quit", quit_fn)

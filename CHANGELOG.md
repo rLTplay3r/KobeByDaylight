@@ -3,6 +3,16 @@
 Every new feature or fix raises the last number of the version in
 `dbd_overlay/__init__.py` (0.0.12 -> 0.0.13).
 
+## 0.0.20
+- Killer POV: blinding the killer with the flashlight shows the blinded killer's view in the
+  top-right corner with a "KILLER POV →" label, like in the edit. Detected while the right mouse
+  button (flashlight) is held, from the white burst in the middle of the screen.
+- Dancing Kobe from `dancing/` (black background made transparent while playing, empty margins
+  cropped): at random moments and from the Dance button.
+- Kobe going "shh" (hiding in a locker): Hide button for now, no detection yet.
+- New toggles (Kobe dance, Killer POV on blind), Dance frequency, Dance and Killer POV sizes,
+  and Dance / Hide / POV trial buttons.
+
 ## 0.0.19
 - Fixed regular stutter on Windows while the overlay runs: the check whether the game is
   running now happens on a background thread and only reads process names on Windows
