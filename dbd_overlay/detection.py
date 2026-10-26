@@ -9,12 +9,13 @@ The game log can't be used: BHVR writes DeadByDaylight(-EGS).log encrypted.
 
 import os
 import re
+import sys
 import threading
 import time
 from pathlib import Path
 
 import psutil
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Signal
 
 # Steam: DeadByDaylight-Win64-Shipping.exe, Epic: DeadByDaylight-EGS-Shipping.exe,
 # Windows Store: DeadByDaylight-WinGDK-Shipping.exe
@@ -39,37 +40,69 @@ def _is_game(proc: psutil.Process) -> bool:
     return False
 
 
+# On Windows process names are never shortened, and reading other processes' command
+# lines is slow there, so only Linux (Wine names cut to 15 chars) needs the cmdline.
+_SCAN_ATTRS = ["name"] if sys.platform == "win32" else ["name", "cmdline"]
+
+
+def scan_game_pids() -> set[int]:
+    pids = set()
+    own_pid = os.getpid()
+    for proc in psutil.process_iter(_SCAN_ATTRS):
+        if proc.pid == own_pid:
+            continue
+        try:
+            if _is_game(proc):
+                pids.add(proc.pid)
+        except (psutil.Error, OSError):
+            continue
+    return pids
+
+
 class GameWatcher(QObject):
+    """Checks every few seconds whether the game runs, on a worker thread.
+
+    Walking the process list can take hundreds of milliseconds on Windows; on the
+    UI thread that froze the whole app every few seconds.
+    """
+
     game_running_changed = Signal(bool)
+    _scanned = Signal(object)  # set of pids, delivered to the UI thread
+
+    INTERVAL = 3.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.game_running = False
         self.pids: set[int] = set()
         self.sandboxed = in_sandbox()
-        self._timer = QTimer(self)
-        self._timer.setInterval(3000)
-        self._timer.timeout.connect(self._check)
+        self._stop_event: threading.Event | None = None
+        self._scanned.connect(self._apply)
 
     def start(self):
-        self._check()
-        self._timer.start()
+        if self._stop_event is not None:
+            return
+        # One event per run, so a quick stop/start can't leave two threads scanning
+        stop = self._stop_event = threading.Event()
+        threading.Thread(target=self._run, args=(stop,), name="game-watcher", daemon=True).start()
 
     def stop(self):
-        self._timer.stop()
+        if self._stop_event is not None:
+            self._stop_event.set()
+            self._stop_event = None
+        self.pids = set()
         self._set_running(False)
 
-    def _check(self):
-        pids = set()
-        own_pid = os.getpid()
-        for proc in psutil.process_iter(["name", "cmdline"]):
-            if proc.pid == own_pid:
-                continue
-            try:
-                if _is_game(proc):
-                    pids.add(proc.pid)
-            except (psutil.Error, OSError):
-                continue
+    def _run(self, stop: threading.Event):
+        while not stop.is_set():
+            pids = scan_game_pids()
+            if not stop.is_set():
+                self._scanned.emit(pids)
+            stop.wait(self.INTERVAL)
+
+    def _apply(self, pids: set[int]):
+        if self._stop_event is None:  # stopped while that scan was running
+            return
         self.pids = pids
         self._set_running(bool(pids))
 

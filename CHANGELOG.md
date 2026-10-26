@@ -3,6 +3,11 @@
 Every new feature or fix raises the last number of the version in
 `dbd_overlay/__init__.py` (0.0.12 -> 0.0.13).
 
+## 0.0.19
+- Fixed regular stutter on Windows while the overlay runs: the check whether the game is
+  running now happens on a background thread and only reads process names on Windows
+  (reading every process's command line took hundreds of milliseconds there).
+
 ## 0.0.18
 - Prepared for the public GitHub repository: `.gitignore`, MIT license, README with download,
   usage and build-from-source instructions for Linux and Windows.
