@@ -4,15 +4,19 @@ import math
 import random
 import time
 
-from PySide6.QtCore import QEasingCurve, QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QEasingCurve, QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QColor, QFont, QFontMetricsF, QGuiApplication, QImage, QMovie, QPainter, QPainterPath, QPen, QPixmap,
+    QRegion,
 )
 from PySide6.QtWidgets import QWidget
 
 from . import paths
 
-FRAME_MS = 16
+# 30 fps is plenty for an overlay; only the parts that move are repainted each frame
+FRAME_MS = 33
+TIMER_CHARS = "0123456789:."
+BLUR_STEPS = 8
 SLIDE_IN = 0.35
 SLIDE_OUT = 0.35
 BUBBLE_DELAY = 0.2
@@ -111,9 +115,21 @@ class OverlayWindow(QWidget):
         self._dance_end: float | None = None
         self.dance_preview: QImage | None = None
 
+        # Caches: the timer's digits as pixmaps (big text is drawn as curves by Qt and is
+        # very slow), the speech bubble with its text, the "KILLER POV" label
+        self._glyphs_for = None
+        self._glyphs: dict[str, QPixmap] = {}
+        self._timer_text = ""
+        self._timer_px: QPixmap | None = None
+        self._tinted: dict[str, QPixmap] = {}
+        self._bubble_cache: tuple[str, int, tuple] | None = None
+        self._bubble_text_px: QPixmap | None = None
+        self._pov_label: tuple[tuple, QPixmap, float] | None = None
+        self._dirty_last = QRegion()
+
         self._frame = QTimer(self)
         self._frame.setInterval(FRAME_MS)
-        self._frame.timeout.connect(self.update)
+        self._frame.timeout.connect(self._tick)
 
     # -- public API ---------------------------------------------------------
 
@@ -163,6 +179,7 @@ class OverlayWindow(QWidget):
         index = random.choice(choices)
         self._last_sprite = index
         self._popup = (time.monotonic(), duration, text, index)
+        self._bubble_cache = None
         return True
 
     def kick(self):
@@ -226,6 +243,53 @@ class OverlayWindow(QWidget):
     def dance_active(self) -> bool:
         return self._dance_img is not None
 
+    # -- repaint scheduling -------------------------------------------------
+
+    def _tick(self):
+        """Repaint only what moves: the areas of the active elements, plus where they were."""
+        if self._preview_start is not None:
+            self.update()
+            return
+        region = QRegion()
+        for rect in self._envelopes(time.monotonic()):
+            region = region.united(rect)
+        dirty = region.united(self._dirty_last)
+        self._dirty_last = region
+        if not dirty.isEmpty():
+            self.update(dirty)
+
+    def _envelopes(self, now: float) -> list[QRect]:
+        """Screen areas each active element can paint into (generous, cheap to compute)."""
+        if self._match_start is None:
+            return []
+        self._ensure_scaled()
+        h, w = self.height(), self.width()
+        rects = []
+        if self.timer_visible:
+            th = h * self.scales["timer"]
+            box_w = self._timer_box_width(th)
+            # The digits overshoot to the right and up a little when they spring back
+            rects.append(QRect(0, 0, int(box_w + th * 0.12), int(th * 0.2)))
+        if self._popup and self._sprites:
+            index = self._popup[3]
+            kobe = self._sprite_px[index].deviceIndependentSize()
+            bubble = self._bubble_px.deviceIndependentSize()
+            kx = h * 0.11
+            top = h - kobe.height() - bubble.height()
+            rects.append(QRect(int(kx) - 2, int(top), int(kobe.width() + bubble.width() * 1.15) + 4, int(h - top)))
+        if self._hide_start is not None and not self._hiding.isNull():
+            size = self._hiding_px.deviceIndependentSize()
+            x = w - size.width() - h * 0.12
+            rects.append(QRect(int(x) - 2, int(h - size.height() * 1.15), int(size.width()) + 4, int(size.height() * 1.15) + 2))
+        if self._pov_shown is not None:
+            ph = h * POV_SIZE * self.scales["pov"]
+            rects.append(QRect(int(w - ph * 16 / 9 - ph * 3), 0, int(ph * 16 / 9 + ph * 3) + 2, int(ph) + 2))
+        if self._dance_img is not None:
+            size = self._dance_img.deviceIndependentSize()
+            x = h * 0.85 - size.width() / 2
+            rects.append(QRect(int(x) - 2, int(h - size.height()) - 2, int(size.width()) + 4, int(size.height()) + 4))
+        return rects
+
     # -- painting -----------------------------------------------------------
 
     def _cover_screen(self, game_center: tuple[int, int] | None):
@@ -265,12 +329,15 @@ class OverlayWindow(QWidget):
         self._bubble_px.setDevicePixelRatio(dpr)
         self._scaled_for = key
 
-    def paintEvent(self, _event):
+    def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing
                          | QPainter.RenderHint.SmoothPixmapTransform)
+        # Clear only the repainted area; Qt clips everything below to it as well
+        p.setClipRegion(event.region())
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
-        p.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        for rect in event.region():
+            p.fillRect(rect, Qt.GlobalColor.transparent)
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         preview = self._preview_start is not None
         if self._match_start is None and not preview:
@@ -342,21 +409,36 @@ class OverlayWindow(QWidget):
         p.save()
         p.setOpacity(max(0.0, alpha))
         p.drawPixmap(rect, self._pov.currentPixmap(), QRectF(self._pov.currentPixmap().rect()))
-        # "KILLER POV ->" in yellow with a thick purple outline, left of the inset
+        label, tw = self._pov_label_pixmap(ph)
+        p.drawPixmap(QPointF(rect.left() - tw - ph * 0.12, 0), label)
+        p.restore()
+
+    def _pov_label_pixmap(self, ph: float) -> tuple[QPixmap, float]:
+        """"KILLER POV ->" in yellow with a thick purple outline, rendered once per size."""
+        dpr = self.devicePixelRatioF()
+        key = (round(ph), dpr)
+        if self._pov_label and self._pov_label[0] == key:
+            return self._pov_label[1], self._pov_label[2]
         font = QFont()
         font.setFamilies(["Oswald", "Impact", "Arial Black", "DejaVu Sans"])
         font.setWeight(QFont.Weight.Bold)
         font.setPixelSize(max(12, int(ph * 0.19)))
         fm = QFontMetricsF(font)
         tw = fm.horizontalAdvance(POV_LABEL)
+        pen = max(2.0, ph * 0.035)
+        px = QPixmap(int((tw + pen * 2) * dpr) + 2, int(ph * dpr) + 2)
+        px.setDevicePixelRatio(dpr)
+        px.fill(Qt.GlobalColor.transparent)
+        q = QPainter(px)
+        q.setRenderHint(QPainter.RenderHint.Antialiasing)
         path = QPainterPath()
-        path.addText(rect.left() - tw - ph * 0.12, ph * 0.45 + fm.ascent() / 2 - fm.descent() / 2, font, POV_LABEL)
-        p.setPen(QPen(QColor("#5b1fa8"), max(2.0, ph * 0.035), Qt.PenStyle.SolidLine,
-                      Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(path)
-        p.fillPath(path, QColor("#ffe81a"))
-        p.restore()
+        path.addText(pen, ph * 0.45 + fm.ascent() / 2 - fm.descent() / 2, font, POV_LABEL)
+        q.setPen(QPen(QColor("#5b1fa8"), pen, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        q.drawPath(path)
+        q.fillPath(path, QColor("#ffe81a"))
+        q.end()
+        self._pov_label = (key, px, tw + pen)
+        return px, tw + pen
 
     def _paint_hiding(self, p: QPainter, t: float):
         h, w = self.height(), self.width()
@@ -383,23 +465,88 @@ class OverlayWindow(QWidget):
         p.drawImage(int(x), int(h - size.height()), img)
         p.restore()
 
-    def _paint_timer(self, p: QPainter, elapsed: float, now: float):
-        # Thin white digits on a dark box flush with the top-left corner, sized like the edit:
-        # digits ~9% of the screen height, box ~0.6 x 0.14 of the height
-        h = self.height() * self.scales["timer"]
+    @staticmethod
+    def _timer_font(th: float) -> QFont:
         font = QFont()
         # Hairline digits like the edit: the thinnest weight the system has
         font.setFamilies(["Helvetica Neue", "Segoe UI Light", "Segoe UI", "Noto Sans", "DejaVu Sans"])
         font.setWeight(QFont.Weight.ExtraLight)
-        font.setPixelSize(max(12, int(h * 0.13)))
+        font.setPixelSize(max(12, int(th * 0.13)))
         font.setStyleHint(QFont.StyleHint.SansSerif)
-        p.setFont(font)
+        return font
+
+    def _timer_box_width(self, th: float) -> float:
+        fm = QFontMetricsF(self._timer_font(th))
+        return fm.horizontalAdvance("00:00.00") + th * 0.058
+
+    def _ensure_glyphs(self, th: float):
+        """Each timer character rendered once; the timer is then just a row of pixmaps."""
+        dpr = self.devicePixelRatioF()
+        key = (round(th), dpr)
+        if self._glyphs_for == key:
+            return
+        font = self._timer_font(th)
         fm = QFontMetricsF(font)
+        self._glyph_h = fm.height()
+        self._glyph_ascent = fm.ascent()
+        self._glyph_cap = fm.capHeight()
+        self._glyph_adv = {c: fm.horizontalAdvance(c) for c in TIMER_CHARS}
+        self._glyphs = {}
+        for c in TIMER_CHARS:
+            px = QPixmap(int((self._glyph_adv[c] + 4) * dpr) + 1, int(self._glyph_h * dpr) + 1)
+            px.setDevicePixelRatio(dpr)
+            px.fill(Qt.GlobalColor.transparent)
+            q = QPainter(px)
+            q.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+            q.setFont(font)
+            q.setPen(QColor(255, 255, 255))
+            q.drawText(QPointF(2, self._glyph_ascent), c)
+            q.end()
+            self._glyphs[c] = px
+        self._glyphs_for = key
+        self._timer_text = ""
+
+    def _text_pixmap(self, text: str) -> QPixmap:
+        """The whole time as one white pixmap, rebuilt only when the text changes."""
+        if text != self._timer_text or self._timer_px is None:
+            dpr = self.devicePixelRatioF()
+            width = sum(self._glyph_adv[c] for c in text) + 4
+            px = QPixmap(int(width * dpr) + 1, int(self._glyph_h * dpr) + 1)
+            px.setDevicePixelRatio(dpr)
+            px.fill(Qt.GlobalColor.transparent)
+            q = QPainter(px)
+            x = 0.0
+            for c in text:
+                q.drawPixmap(QPointF(x, 0), self._glyphs[c])
+                x += self._glyph_adv[c]
+            q.end()
+            self._timer_px, self._timer_text = px, text
+            self._tinted = {}
+        return self._timer_px
+
+    def _tinted_pixmap(self, color: str) -> QPixmap:
+        if color not in self._tinted:
+            px = QPixmap(self._timer_px)
+            q = QPainter(px)
+            q.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+            q.fillRect(px.rect(), QColor(color))
+            q.end()
+            self._tinted[color] = px
+        return self._tinted[color]
+
+    def _paint_timer(self, p: QPainter, elapsed: float, now: float):
+        # Thin white digits on a dark box flush with the top-left corner, sized like the edit:
+        # digits ~9% of the screen height, box ~0.6 x 0.14 of the height
+        h = self.height() * self.scales["timer"]
+        self._ensure_glyphs(h)
         text = format_elapsed(elapsed)
+        digits = self._text_pixmap(text)
         # Fixed-width box so it does not wobble as digits change
-        pad_l, pad_r = h * 0.028, h * 0.03
-        box = QRectF(0, 0, fm.horizontalAdvance("00:00.00") + pad_l + pad_r, h * 0.136)
-        baseline = box.height() / 2 + fm.capHeight() / 2
+        pad_l = h * 0.028
+        box = QRectF(0, 0, self._timer_box_width(h), h * 0.136)
+        # Top-left of the text pixmap so the digits sit centred in the box
+        top = box.height() / 2 + self._glyph_cap / 2 - self._glyph_ascent
+        origin = QPointF(pad_l - 2, top)
 
         # The box stays put; only the digits jump inside it (and off the screen edge)
         dx = dy = 0.0
@@ -427,23 +574,20 @@ class OverlayWindow(QWidget):
         p.translate(-box.width() / 2, -box.height() / 2)
         if blur > 0.02 or split > 0.02:
             p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
-            # Motion blur: many faint copies spread along the motion, centred on the digits,
-            # so it reads as a smooth streak rather than separate echoes
-            steps = 20
-            for i in range(steps):
-                f = i / (steps - 1) - 0.5
-                weight = 1 - abs(f) * 1.2
-                p.setPen(QColor(255, 255, 255, int(255 * 2.2 / steps * blur * weight)))
-                p.drawText(QPointF(pad_l + trail[0] * f, baseline + trail[1] * f), text)
+            # Motion blur: faint copies spread along the motion, centred on the digits
+            for i in range(BLUR_STEPS):
+                f = i / (BLUR_STEPS - 1) - 0.5
+                p.setOpacity(min(1.0, 2.2 / BLUR_STEPS * blur * (1 - abs(f) * 1.2)))
+                p.drawPixmap(origin + QPointF(trail[0] * f, trail[1] * f), digits)
             # Chromatic split: red to the left, blue to the right
             off = h * 0.005 * split
-            for color, ox in ((QColor(255, 20, 40, int(110 * split)), -off), (QColor(30, 110, 255, int(110 * split)), off)):
-                p.setPen(color)
-                p.drawText(QPointF(pad_l + ox, baseline), text)
+            p.setOpacity(min(1.0, 0.43 * split))
+            p.drawPixmap(origin + QPointF(-off, 0), self._tinted_pixmap("#ff1428"))
+            p.drawPixmap(origin + QPointF(off, 0), self._tinted_pixmap("#1e6eff"))
             p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         # Sharp copy fades while the smear is strong, like the motion-blurred frames
-        p.setPen(QColor(255, 255, 255, int(235 * (1 - 0.6 * blur))))
-        p.drawText(QPointF(pad_l, baseline), text)
+        p.setOpacity(0.92 * (1 - 0.6 * blur))
+        p.drawPixmap(origin, digits)
         p.restore()
 
     def _paint_kobe(self, p: QPainter, t: float, duration: float, text: str, index: int):
@@ -474,11 +618,23 @@ class OverlayWindow(QWidget):
         p.translate(tip_x, tip_y)
         p.scale(scale, scale)
         p.translate(0, -bubble_h * BUBBLE_TIP_Y)
-        p.drawPixmap(0, 0, bubble)
-        fx, fy, fw, fh = BUBBLE_TEXT_RECT
-        rect = QRectF(bubble_w * fx, bubble_h * fy, bubble_w * fw, bubble_h * fh)
-        self._draw_fitted_text(p, rect, text)
+        p.drawPixmap(0, 0, self._bubble_with_text(text, bubble))
         p.restore()
+
+    def _bubble_with_text(self, text: str, bubble: QPixmap) -> QPixmap:
+        """Bubble image with the line drawn in, made once per pop-up (fitting text is slow)."""
+        key = (text, bubble.cacheKey())
+        if self._bubble_cache != key:
+            px = QPixmap(bubble)
+            size = bubble.deviceIndependentSize()
+            fx, fy, fw, fh = BUBBLE_TEXT_RECT
+            q = QPainter(px)
+            q.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
+            self._draw_fitted_text(q, QRectF(size.width() * fx, size.height() * fy,
+                                             size.width() * fw, size.height() * fh), text)
+            q.end()
+            self._bubble_cache, self._bubble_text_px = key, px
+        return self._bubble_text_px
 
     def _paint_preview_banner(self, p: QPainter):
         h = self.height()

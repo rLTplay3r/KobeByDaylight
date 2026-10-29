@@ -95,6 +95,10 @@ def plan(targets: list[str]) -> list[Step]:
         Step("Install keyboard backend (Linux Python)", py,
              ["-m", "pip", "install", *PIP_QUIET, "--no-deps", "-r", "requirements-nodeps.txt"]),
     ]
+    if "linux" in targets or "windows" in targets:
+        # Dance videos keyed into transparent frames once, so the app doesn't have to
+        steps.append(Step("Prepare dance frames", py, ["-m", "dbd_overlay.dance", "--prepare", "build/dance-frames"],
+                          {"QT_QPA_PLATFORM": "offscreen"}))
     if "linux" in targets:
         steps.append(Step("Build Linux executable", py,
                           ["-m", "PyInstaller", "--noconfirm", "--clean", "--distpath", "dist",

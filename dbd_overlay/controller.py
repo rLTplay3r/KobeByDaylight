@@ -78,6 +78,8 @@ class Controller(QObject):
         self.dance = DancePlayer(self)
         self.dance.frame.connect(self.overlay.set_dance_frame)
         self.dance.finished.connect(self.overlay.dance_finished)
+        self.dance.ready_changed.connect(self._on_dance_ready)
+        self.dance.prepare_all()
         self._dance_timer = QTimer(self)
         self._dance_timer.setSingleShot(True)
         self._dance_timer.timeout.connect(self._scheduled_dance)
@@ -200,6 +202,7 @@ class Controller(QObject):
         self._manual_match = manual
         self._hud_last_seen = time.monotonic()
         self.match_start = time.monotonic()
+        self.hud.in_match = True
         self.overlay.start_match(self.match_start, self.hud.game_center)
         if self.config["music_enabled"]:
             self.audio.start_music()
@@ -213,6 +216,7 @@ class Controller(QObject):
         if not self.in_match:
             return
         self.match_start = None
+        self.hud.in_match = False
         self._kobe_timer.stop()
         self._sound_timer.stop()
         self._dance_timer.stop()
@@ -279,6 +283,10 @@ class Controller(QObject):
     def show_dance(self):
         if self.in_match:
             self.dance.start(self.overlay.dance_height(), float(self.config["dance_duration"]))
+
+    def _on_dance_ready(self):
+        if self.in_match and not self._dance_timer.isActive() and not self.dance.playing():
+            self._schedule_dance()
 
     def _scheduled_dance(self):
         if not self.in_match:

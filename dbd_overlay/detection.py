@@ -122,7 +122,8 @@ class HudWatcher(QObject):
     sample = Signal(float, str)  # best rhombus score, capture status
     blind = Signal()
 
-    INTERVAL = 0.5
+    INTERVAL = 1.0        # looking for a spawn
+    MATCH_INTERVAL = 2.0  # in a match: only needs to notice when it's over
     FLASH_INTERVAL = 0.1
     FLASH_LINGER = 0.6     # keep watching a moment after the button is released
     FLASH_MIN_HOLD = 0.25  # a blind needs the beam on the killer for a while
@@ -137,6 +138,7 @@ class HudWatcher(QObject):
         self._save_debug = False
         self.game_center: tuple[int, int] | None = None  # native pixels, for picking the monitor
         self.blind_threshold = 0.35
+        self.in_match = False
         self._flash_since: float | None = None  # flashlight held since (monotonic)
         self._flash_until = 0.0                 # still watching until (after release)
 
@@ -149,6 +151,9 @@ class HudWatcher(QObject):
 
     def stop(self):
         self._stop.set()
+
+    def _hud_interval(self) -> float:
+        return self.MATCH_INTERVAL if self.in_match else self.INTERVAL
 
     def save_debug_capture(self):
         self._save_debug = True
@@ -182,7 +187,7 @@ class HudWatcher(QObject):
         last_blind = 0.0
         baseline: float | None = None
         while not self._stop.wait(self.FLASH_INTERVAL if self._flash_watch(time.monotonic()) is not None
-                                  else self.INTERVAL):
+                                  else self._hud_interval()):
             pids = set(self._game.pids)
             if not pids:
                 continue
@@ -204,7 +209,7 @@ class HudWatcher(QObject):
                             and white - baseline > 0.2 and now - last_blind > self.BLIND_COOLDOWN):
                         last_blind = now
                         self.blind.emit()
-                if now - last_hud < self.INTERVAL:
+                if now - last_hud < self._hud_interval() - 0.05:
                     continue
                 last_hud = now
                 best, best_img = 0.0, None

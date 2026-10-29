@@ -50,6 +50,8 @@ def _template(r: int, gap: float) -> np.ndarray:
 
 # Diamond half-diagonals to try (pixels in the normalized region) and spacing ratios
 _TEMPLATES = [(r, gap, _template(r, gap)) for r in range(14, 52, 2) for gap in (1.25, 1.34, 1.43)]
+QUICK_ACCEPT = 0.68  # a score this good from the remembered sizes needs no full scan
+_last_best: int | None = None
 
 
 def _diagonal_edge_distance(gray: np.ndarray) -> np.ndarray:
@@ -70,19 +72,35 @@ def perk_rhombus_score(roi_bgr: np.ndarray) -> float:
     Raw hit rate is corrected for how busy the area is, so textured backgrounds
     full of edges don't look like a HUD.
     """
+    global _last_best
     roi = cv2.resize(np.ascontiguousarray(roi_bgr), (NORM, NORM), interpolation=cv2.INTER_AREA)
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     near = (_diagonal_edge_distance(gray) <= 1.5).astype(np.float32)
-    best = 0.0
-    for _, _, t in _TEMPLATES:
-        size = t.shape[0]
-        if size > NORM:
-            continue
-        hits = cv2.matchTemplate(near, t, cv2.TM_CCORR) / float(t.sum())
-        density = cv2.boxFilter(near, -1, (size, size), anchor=(0, 0), normalize=True,
-                                borderType=cv2.BORDER_CONSTANT)[: hits.shape[0], : hits.shape[1]]
-        score = (hits - density) / np.maximum(1.0 - density, 0.05)
-        best = max(best, float(score.max()))
+
+    def scan(indices):
+        best, best_i = 0.0, None
+        for i in indices:
+            t = _TEMPLATES[i][2]
+            size = t.shape[0]
+            if size > NORM:
+                continue
+            hits = cv2.matchTemplate(near, t, cv2.TM_CCORR) / float(t.sum())
+            density = cv2.boxFilter(near, -1, (size, size), anchor=(0, 0), normalize=True,
+                                    borderType=cv2.BORDER_CONSTANT)[: hits.shape[0], : hits.shape[1]]
+            score = float(((hits - density) / np.maximum(1.0 - density, 0.05)).max())
+            if score > best:
+                best, best_i = score, i
+        return best, best_i
+
+    # The HUD size doesn't change during play: try the sizes around the last match first
+    if _last_best is not None:
+        near_sizes = [i for i in range(len(_TEMPLATES)) if abs(i // 3 - _last_best // 3) <= 2]
+        best, best_i = scan(near_sizes)
+        if best >= QUICK_ACCEPT:
+            return best
+    best, best_i = scan(range(len(_TEMPLATES)))
+    if best >= QUICK_ACCEPT:
+        _last_best = best_i
     return best
 
 

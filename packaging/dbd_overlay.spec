@@ -16,6 +16,10 @@ datas = [
     (str(ROOT / "fonts"), "fonts"),
 ]
 
+# Dance videos pre-keyed into frames by the builder ("Prepare dance frames")
+if (ROOT / "build" / "dance-frames").is_dir():
+    datas.append((str(ROOT / "build" / "dance-frames"), "dance-frames"))
+
 # Music isn't part of the public source (copyright): bundle whatever is in Music/, if anything
 MUSIC_EXTS = {".mp3", ".ogg", ".wav", ".flac", ".m4a"}
 datas += [(str(p), "Music") for p in sorted((ROOT / "Music").glob("*")) if p.suffix.lower() in MUSIC_EXTS]

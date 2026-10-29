@@ -3,6 +3,17 @@
 Every new feature or fix raises the last number of the version in
 `dbd_overlay/__init__.py` (0.1.0 -> 0.1.1).
 
+## 0.1.1
+- Much lower CPU use (measured in a simulated match: ~61% of a core -> ~5%, with the dance
+  ~106% -> ~15%), which also fixes the stutter while Kobe dances:
+  - The overlay repaints only the parts that move, at 30 fps, instead of the whole screen at 60 fps.
+  - The timer's digits are drawn once and reused (large text was redrawn as curves every frame).
+  - The speech bubble text and the "KILLER POV" label are drawn once per pop-up.
+  - Dancing Kobe plays pre-keyed transparent frames instead of keying the video live. The builder
+    prepares them ("Prepare dance frames"); videos added later are prepared once in the background.
+  - Match detection checks the screen every 2 s during a match (1 s in the lobby) and remembers
+    the HUD size, so each check is about twice as fast.
+
 ## 0.1.0
 - First public release.
 - Dance length setting (3-30 s, default 12 s, longer than before); the clip repeats if needed.

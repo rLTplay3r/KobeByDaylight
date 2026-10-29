@@ -26,6 +26,7 @@ SOUNDS_DIR = _asset("Sounds")
 KOBE_SPRITES_DIR = _asset("kobe-sprites")
 EFFECTS_DIR = _asset("effects")
 DANCE_DIR = _asset("dancing")
+DANCE_FRAMES_DIR = _asset("dance-frames")  # prepared sequences shipped with builds
 KILLER_POV = EFFECTS_DIR / "killer-pov.gif"
 KOBE_HIDING = EFFECTS_DIR / "kobe-hiding.png"
 BUBBLE_IMAGE = _asset("speechbuble.png")
